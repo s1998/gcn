@@ -146,6 +146,8 @@ class GraphConvolution(Layer):
         self.sparse_inputs = sparse_inputs
         self.featureless = featureless
         self.bias = bias
+        self.output_dim = output_dim
+        self.input_dim = input_dim
 
         # helper variable for sparse dropout
         self.num_features_nonzero = placeholders['num_features_nonzero']
@@ -161,6 +163,7 @@ class GraphConvolution(Layer):
             self._log_vars()
 
     def _call(self, inputs):
+        self.inputs = inputs
         x = inputs
 
         # dropout
@@ -171,6 +174,7 @@ class GraphConvolution(Layer):
 
         # convolve
         supports = list()
+        assert len(self.support) == 1
         for i in range(len(self.support)):
             if not self.featureless:
                 pre_sup = dot(x, self.vars['weights_' + str(i)],
@@ -179,6 +183,7 @@ class GraphConvolution(Layer):
                 pre_sup = self.vars['weights_' + str(i)]
             support = dot(self.support[i], pre_sup, sparse=True)
             supports.append(support)
+        assert len(supports) == 1
         output = tf.add_n(supports)
 
         # bias
@@ -186,3 +191,56 @@ class GraphConvolution(Layer):
             output += self.vars['bias']
 
         return self.act(output)
+
+    def relprop(self, relinp, support2):
+        z = {}
+        z_1 = {}
+        z_2 = {}
+        if "array" not in str(type(self.input_)):
+            vals = {}
+            for a, b in zip(self.input_[0], self.input_[1]):
+                if a[0] not in vals: vals[(a[0])]=[]
+                vals[(a[0])].append((a[1], b))
+        
+        for i, k in support2.keys():
+            aik = support2[(i, k)]
+            for j in range(self.output_dim):
+                if "array" not in str(type(self.input_)):
+                    if i in vals:
+                        for l, val in vals[i]:
+                            temp2  = val
+                            z[(i, j, k, l)] = aik * temp2 * self.weight_[l, j]
+                            if (i, j) not in z_1:
+                                z_1[(i, j)] = []
+                            z_1[(i, j)].append(z[(i, j, k, l)])
+                            if (k, l) not in z_2:
+                                z_2[(k ,l)] = []
+                            z_2[(k, l)].append((z[(i, j, k, l)], (i, j)))
+                else:
+                    for l in range(self.input_dim):
+                        temp2 = self.input_[k, l]
+                        z[(i, j, k, l)] = aik * temp2 * self.weight_[l, j]
+                        if (i, j) not in z_1:
+                            z_1[(i, j)] = []
+                        z_1[(i, j)].append(z[(i, j, k, l)])
+                        if (k, l) not in z_2:
+                            z_2[(k ,l)] = []
+                        z_2[(k, l)].append((z[(i, j, k, l)], (i, j)))
+
+        for i in range(support2.shape[0]):
+            for j in range(self.output_dim):
+                temp = 0.0
+                if (i,j) not in z_1:
+                    continue
+                for k in z_1[(i, j)]:
+                    temp += k
+                z_1[(i, j)] = float(relinp[i, j]) / temp
+
+        relout = np.zeros((support2.shape[0], self.input_dim))
+        for k, l in z_2:
+            ans = 0.0
+            for val, k in z_2[(k, l)]:
+                ans += float(val) * z_1[k]
+            relout[k, l] = ans
+            
+        return relout

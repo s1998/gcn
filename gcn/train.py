@@ -6,6 +6,7 @@ import tensorflow as tf
 
 from gcn.utils import *
 from gcn.models import GCN, MLP
+from cora import dataset
 
 # Set random seed
 seed = 123
@@ -26,12 +27,13 @@ flags.DEFINE_integer('early_stopping', 10, 'Tolerance for early stopping (# of e
 flags.DEFINE_integer('max_degree', 3, 'Maximum Chebyshev polynomial degree.')
 
 # Load data
-adj, features, y_train, y_val, y_test, train_mask, val_mask, test_mask = load_data(FLAGS.dataset)
+adj, features, y_train, y_val, y_test, train_mask, val_mask, test_mask = dataset()
 
 # Some preprocessing
 features = preprocess_features(features)
 if FLAGS.model == 'gcn':
     support = [preprocess_adj(adj)]
+    support2 = preprocess_adj2(adj)
     num_supports = 1
     model_func = GCN
 elif FLAGS.model == 'gcn_cheby':
@@ -56,8 +58,7 @@ placeholders = {
 }
 
 # Create model
-model = model_func(placeholders, input_dim=features[2][1], logging=True)
-
+model = model_func(placeholders, input_dim=features[2][1], support2=support2, logging=True)
 # Initialize session
 sess = tf.Session()
 
@@ -102,6 +103,60 @@ for epoch in range(FLAGS.epochs):
 print("Optimization Finished!")
 
 # Testing
-test_cost, test_acc, test_duration = evaluate(features, support, y_test, test_mask, placeholders)
-print("Test set results:", "cost=", "{:.5f}".format(test_cost),
-      "accuracy=", "{:.5f}".format(test_acc), "time=", "{:.5f}".format(test_duration))
+# test_cost, test_acc, test_duration = evaluate(features, support, y_test, test_mask, placeholders)
+# print("Test set results:", "cost=", "{:.5f}".format(test_cost),
+#       "accuracy=", "{:.5f}".format(test_acc), "time=", "{:.5f}".format(test_duration))
+
+
+import pickle
+
+
+feed_dict_val = construct_feed_dict(features, support, y_test, test_mask, placeholders)
+
+maxlabel=np.argmax(y_test, axis=1)
+
+model.save_weights(sess)
+model.save_inp(feed_dict_val, sess)
+outs=sess.run([model.outputs], feed_dict=feed_dict_val)
+
+outs=outs[0]
+
+
+def matrix_to_dictionary(ans, ind):
+    maxind=np.argmax(ans, axis=1)
+    dic={}
+    for i in range(len(maxlabel)):
+        if maxlabel[i] not in dic:
+            dic[maxlabel[i]]=[]
+        if y_test[i][maxlabel[i]]==0:
+            continue
+        maxind1=ans[i].argsort()[-10:][::-1]
+        for z in maxind1:
+            if ans[i][z]>0.0:
+                dic[maxlabel[i]].append(z)
+            else:break
+    st='dictionary' + str(ind)
+    with open(st, 'wb') as f:
+        pickle.dump(dic, f)	
+
+def make_dic_and_graphs(ans, ind):
+	print(ind)
+	matrix_to_dictionary(ans, ind)
+	print("Creating Graphs")
+
+ans = model.relprop(outs)
+
+with open('y_test', 'wb') as f:
+    pickle.dump(y_test, f)
+
+make_dic_and_graphs(ans, y_train.shape[1])
+
+# outs_copy=outs.copy()
+# for i in range(y_train.shape[1]):
+# 	outs=outs_copy.copy()
+# 	for j in range(len(y_test)):
+# 		if (maxlabel[j]!=i):
+# 			for k in range(len(outs[j])):
+# 				outs[j][k]=0
+# 	ans = model.relprop(outs)
+# 	make_dic_and_graphs(ans, i)

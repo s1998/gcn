@@ -130,7 +130,7 @@ class MLP(Model):
 
 
 class GCN(Model):
-    def __init__(self, placeholders, input_dim, **kwargs):
+    def __init__(self, placeholders, input_dim, support2, **kwargs):
         super(GCN, self).__init__(**kwargs)
 
         self.inputs = placeholders['features']
@@ -140,7 +140,7 @@ class GCN(Model):
         self.placeholders = placeholders
 
         self.optimizer = tf.train.AdamOptimizer(learning_rate=FLAGS.learning_rate)
-
+        self.support2 = support2
         self.build()
 
     def _loss(self):
@@ -175,3 +175,20 @@ class GCN(Model):
 
     def predict(self):
         return tf.nn.softmax(self.outputs)
+
+    def relprop(self, output):
+        self.last = output
+        self.last1 = self.layers[1].relprop(self.last, self.support2)
+        self.last2 = self.layers[0].relprop(self.last1, self.support2)
+        return self.last2
+
+
+    def save_weights(self, sess1):
+        weights = sess1.run([layer.vars['weights_0'] for layer in self.layers])
+        for l, w in zip(self.layers, weights):
+            l.weight_ = w
+
+    def save_inp(self, feed_dict_val, sess1):
+        acts = sess1.run([act for act in self.activations], feed_dict = feed_dict_val)
+        for i, l in enumerate(self.layers):
+            l.input_ = acts[i]
